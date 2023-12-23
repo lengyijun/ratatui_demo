@@ -79,6 +79,12 @@ impl Deck {
         None
     }
 
+    // requires{0 <= q <= 5}
+    pub fn update(&mut self, question: String, q: u8) {
+        let sm = self.0[&question].sm2(q);
+        self.0.insert(question, sm);
+    }
+
     pub fn fake_data() -> Self {
         Self(
             [(

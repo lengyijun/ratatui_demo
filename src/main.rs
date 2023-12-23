@@ -1,6 +1,7 @@
 mod supermemo;
 mod theme;
 
+use std::time::{Duration, Instant};
 use std::{error::Error, io};
 
 use crate::theme::THEME;
@@ -33,6 +34,12 @@ enum AnswerStatus {
     Hide,
 }
 
+#[derive(Clone, Copy)]
+enum ExitCode {
+    ManualExit,
+    OutOfCard,
+}
+
 impl AnswerStatus {
     fn flip(self) -> Self {
         match self {
@@ -47,6 +54,7 @@ struct App {
     question: String,
     answer: String,
     answer_status: AnswerStatus,
+    spent_time: Option<Duration>,
 }
 
 impl App {
@@ -81,50 +89,84 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     terminal.show_cursor()?;
 
-    if let Err(err) = res {
-        println!("{err:?}");
+    match res {
+        Ok(ExitCode::ManualExit) => {}
+        Ok(ExitCode::OutOfCard) => {
+            println!("All cards reviewed");
+        }
+        Err(err) => {
+            eprintln!("{err:?}");
+        }
     }
 
     Ok(())
 }
 
-fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
+fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<ExitCode> {
     let mut deck = Deck::fake_data();
     let Some(mut app) = next(&deck) else {
-        return Ok(());
+        return Ok(ExitCode::OutOfCard);
     };
 
     loop {
         terminal.draw(|f| ui(f, &app))?;
+        let start = Instant::now();
 
         if let Event::Key(key) = event::read()? {
             match &app.answer_status {
                 AnswerStatus::Show => match key.code {
                     KeyCode::Char('h') => {
+                        let spent_time = app.spent_time.unwrap();
+                        let q = if spent_time < Duration::from_secs(5) {
+                            2
+                        } else {
+                            1
+                        };
+                        deck.update(app.question.to_owned(), q);
+
                         let Some(new_app) = next(&deck) else {
-                            return Ok(());
+                            return Ok(ExitCode::OutOfCard);
                         };
                         app = new_app
                     }
                     KeyCode::Char('g') => {
+                        let spent_time = app.spent_time.unwrap();
+                        let q = if spent_time < Duration::from_secs(5) {
+                            5
+                        } else if spent_time < Duration::from_secs(15) {
+                            4
+                        } else {
+                            3
+                        };
+                        deck.update(app.question.to_owned(), q);
+
                         let Some(new_app) = next(&deck) else {
-                            return Ok(());
+                            return Ok(ExitCode::OutOfCard);
                         };
                         app = new_app
                     }
                     KeyCode::Char('f') => {
+                        deck.update(app.question.to_owned(), 0);
+
                         let Some(new_app) = next(&deck) else {
-                            return Ok(());
+                            return Ok(ExitCode::OutOfCard);
                         };
                         app = new_app
                     }
                     KeyCode::Char(' ') => app.toggle(),
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                    KeyCode::Char('q') | KeyCode::Esc => return Ok(ExitCode::ManualExit),
                     _ => {}
                 },
                 AnswerStatus::Hide => match key.code {
-                    KeyCode::Char(' ') => app.toggle(),
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                    KeyCode::Char(' ') => {
+                        let end = Instant::now();
+                        let duration = end - start;
+                        if app.spent_time.is_none() {
+                            app.spent_time = Some(duration);
+                        }
+                        app.toggle();
+                    }
+                    KeyCode::Char('q') | KeyCode::Esc => return Ok(ExitCode::ManualExit),
                     _ => {}
                 }, /*
                    InputMode::Normal => match key.code {
@@ -229,6 +271,7 @@ fn next(deck: &Deck) -> Option<App> {
         question,
         answer,
         answer_status: AnswerStatus::Hide,
+        spent_time: None,
     })
 }
 
