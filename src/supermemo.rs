@@ -70,13 +70,29 @@ impl Sm {
 pub struct Deck(HashMap<String, Sm>);
 
 impl Deck {
-    fn search_reviewable(&self) -> Option<String> {
+    pub fn search_reviewable(&self) -> Option<String> {
         for (k, v) in &self.0 {
             if v.next_review_time() <= Local::now() {
                 return Some(k.to_owned());
             }
         }
         None
+    }
+
+    pub fn fake_data() -> Self {
+        Self(
+            [(
+                "hello".to_owned(),
+                Sm {
+                    n: 1,
+                    ef: 2.5,
+                    interval: 1,
+                    last_reviewed: "2014-11-28T12:00:09Z".parse::<DateTime<Local>>().unwrap(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        )
     }
 }
 

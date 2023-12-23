@@ -1,7 +1,9 @@
+mod supermemo;
 mod theme;
 
 use std::{error::Error, io};
 
+use crate::theme::THEME;
 /// A simple example demonstrating how to handle user input. This is
 /// a bit out of the scope of the library as it does not provide any
 /// input handling out of the box. However, it may helps some to get
@@ -21,91 +23,42 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{prelude::*, widgets::*};
 use itertools::Itertools;
-use crate::theme::THEME;
+use ratatui::{prelude::*, widgets::*};
+use supermemo::Deck;
 
+#[derive(Clone, Copy)]
+enum AnswerStatus {
+    Show,
+    Hide,
+}
 
-
-enum InputMode {
-    Normal,
-    Editing,
+impl AnswerStatus {
+    fn flip(self) -> Self {
+        match self {
+            AnswerStatus::Show => AnswerStatus::Hide,
+            AnswerStatus::Hide => AnswerStatus::Show,
+        }
+    }
 }
 
 /// App holds the state of the application
 struct App {
-    /// Current value of the input box
-    input: String,
-    /// Position of cursor in the editor area.
-    cursor_position: usize,
-    /// Current input mode
-    input_mode: InputMode,
-    /// History of recorded messages
-    messages: Vec<String>,
-}
-
-impl Default for App {
-    fn default() -> App {
-        App {
-            input: String::new(),
-            input_mode: InputMode::Normal,
-            messages: Vec::new(),
-            cursor_position: 0,
-        }
-    }
+    question: String,
+    answer: String,
+    answer_status: AnswerStatus,
 }
 
 impl App {
-    fn move_cursor_left(&mut self) {
-        let cursor_moved_left = self.cursor_position.saturating_sub(1);
-        self.cursor_position = self.clamp_cursor(cursor_moved_left);
+    fn toggle(&mut self) {
+        self.answer_status = self.answer_status.flip();
     }
 
-    fn move_cursor_right(&mut self) {
-        let cursor_moved_right = self.cursor_position.saturating_add(1);
-        self.cursor_position = self.clamp_cursor(cursor_moved_right);
-    }
-
-    fn enter_char(&mut self, new_char: char) {
-        self.input.insert(self.cursor_position, new_char);
-
-        self.move_cursor_right();
-    }
-
-    fn delete_char(&mut self) {
-        let is_not_cursor_leftmost = self.cursor_position != 0;
-        if is_not_cursor_leftmost {
-            // Method "remove" is not used on the saved text for deleting the selected char.
-            // Reason: Using remove on String works on bytes instead of the chars.
-            // Using remove would require special care because of char boundaries.
-
-            let current_index = self.cursor_position;
-            let from_left_to_current_index = current_index - 1;
-
-            // Getting all characters before the selected character.
-            let before_char_to_delete = self.input.chars().take(from_left_to_current_index);
-            // Getting all characters after selected character.
-            let after_char_to_delete = self.input.chars().skip(current_index);
-
-            // Put all characters together except the selected one.
-            // By leaving the selected one out, it is forgotten and therefore deleted.
-            self.input = before_char_to_delete.chain(after_char_to_delete).collect();
-            self.move_cursor_left();
+    fn get_answer(&self) -> &str {
+        match self.answer_status {
+            AnswerStatus::Show => &self.answer,
+            AnswerStatus::Hide => "",
         }
-    }
-
-    fn clamp_cursor(&self, new_cursor_pos: usize) -> usize {
-        new_cursor_pos.clamp(0, self.input.len())
-    }
-
-    fn reset_cursor(&mut self) {
-        self.cursor_position = 0;
-    }
-
-    fn submit_message(&mut self) {
-        self.messages.push(self.input.clone());
-        self.input.clear();
-        self.reset_cursor();
     }
 }
 
@@ -117,9 +70,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // create app and run it
-    let app = App::default();
-    let res = run_app(&mut terminal, app);
+    let res = run_app(&mut terminal);
 
     // restore terminal
     disable_raw_mode()?;
@@ -137,41 +88,75 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<()> {
+fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
+    let mut deck = Deck::fake_data();
+    let Some(mut app) = next(&deck) else {
+        return Ok(());
+    };
+
     loop {
         terminal.draw(|f| ui(f, &app))?;
 
         if let Event::Key(key) = event::read()? {
-            match app.input_mode {
-                InputMode::Normal => match key.code {
-                    KeyCode::Char('e') => {
-                        app.input_mode = InputMode::Editing;
+            match &app.answer_status {
+                AnswerStatus::Show => match key.code {
+                    KeyCode::Char('h') => {
+                        let Some(new_app) = next(&deck) else {
+                            return Ok(());
+                        };
+                        app = new_app
                     }
-                    KeyCode::Char('q') => {
-                        return Ok(());
+                    KeyCode::Char('g') => {
+                        let Some(new_app) = next(&deck) else {
+                            return Ok(());
+                        };
+                        app = new_app
                     }
+                    KeyCode::Char('f') => {
+                        let Some(new_app) = next(&deck) else {
+                            return Ok(());
+                        };
+                        app = new_app
+                    }
+                    KeyCode::Char(' ') => app.toggle(),
+                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                     _ => {}
                 },
-                InputMode::Editing if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Enter => app.submit_message(),
-                    KeyCode::Char(to_insert) => {
-                        app.enter_char(to_insert);
-                    }
-                    KeyCode::Backspace => {
-                        app.delete_char();
-                    }
-                    KeyCode::Left => {
-                        app.move_cursor_left();
-                    }
-                    KeyCode::Right => {
-                        app.move_cursor_right();
-                    }
-                    KeyCode::Esc => {
-                        app.input_mode = InputMode::Normal;
-                    }
+                AnswerStatus::Hide => match key.code {
+                    KeyCode::Char(' ') => app.toggle(),
+                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                     _ => {}
-                },
-                _ => {}
+                }, /*
+                   InputMode::Normal => match key.code {
+                       KeyCode::Char('e') => {
+                           app.input_mode = InputMode::Editing;
+                       }
+                       KeyCode::Char('q') => {
+                           return Ok(());
+                       }
+                       _ => {}
+                   },
+                   InputMode::Editing if key.kind == KeyEventKind::Press => match key.code {
+                       KeyCode::Enter => app.submit_message(),
+                       KeyCode::Char(to_insert) => {
+                           app.enter_char(to_insert);
+                       }
+                       KeyCode::Backspace => {
+                           app.delete_char();
+                       }
+                       KeyCode::Left => {
+                           app.move_cursor_left();
+                       }
+                       KeyCode::Right => {
+                           app.move_cursor_right();
+                       }
+                       KeyCode::Esc => {
+                           app.input_mode = InputMode::Normal;
+                       }
+                       _ => {}
+                   },
+                   _ => {}
+                    */
             }
         }
     }
@@ -181,97 +166,64 @@ fn ui(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
-            Constraint::Length(3),
-            Constraint::Min(1),
-            Constraint::Length(1),   // button
+            Constraint::Length(3), // question
+            Constraint::Min(1),    // answer
+            Constraint::Length(1), // button
         ])
         .split(f.size());
 
-    let (msg, style) = match app.input_mode {
-        InputMode::Normal => (
-            vec![
-                "Press ".into(),
-                "q".bold(),
-                " to exit, ".into(),
-                "e".bold(),
-                " to start editing.".bold(),
-            ],
-            Style::default().add_modifier(Modifier::RAPID_BLINK),
-        ),
-        InputMode::Editing => (
-            vec![
-                "Press ".into(),
-                "Esc".bold(),
-                " to stop editing, ".into(),
-                "Enter".bold(),
-                " to record the message".into(),
-            ],
-            Style::default(),
-        ),
-    };
-    let mut text = Text::from(Line::from(msg));
-    text.patch_style(style);
-    let help_message = Paragraph::new(text);
-    f.render_widget(help_message, chunks[0]);
-
-    let input = Paragraph::new(app.input.as_str())
+    let question = Paragraph::new(app.question.as_str())
         .alignment(Alignment::Center)
-        .style(match app.input_mode {
-            InputMode::Normal => Style::default(),
-            InputMode::Editing => Style::default().fg(Color::Yellow),
-        })
-        .block(Block::default().borders(Borders::ALL).title("Input"));
-    f.render_widget(input, chunks[1]);
-    match app.input_mode {
-        InputMode::Normal =>
-            // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
-            {}
+        .block(Block::default().borders(Borders::ALL));
+    f.render_widget(question, chunks[0]);
 
-        InputMode::Editing => {
-            // Make the cursor visible and ask ratatui to put it at the specified coordinates after
-            // rendering
-            f.set_cursor(
-                // Draw the cursor at the current position in the input field.
-                // This position is can be controlled via the left and right arrow key
-                chunks[1].x + app.cursor_position as u16 + 1,
-                // Move one line down, from the border to the input line
-                chunks[1].y + 1,
-            )
-        }
-    }
+    let answer = Paragraph::new(app.get_answer())
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::ALL));
+    f.render_widget(answer, chunks[1]);
 
-    let messages: Vec<ListItem> = app
-        .messages
+    let hide_keys = [("<Space>", "Show answer")];
+
+    let show_keys = [
+        ("Q/Esc", "Quit"),
+        ("f", "Forget"),
+        ("h", "Hard"),
+        ("g", "Good"),
+    ];
+
+    let keys: &[(&str, &str)] = match app.answer_status {
+        AnswerStatus::Show => &show_keys,
+        AnswerStatus::Hide => &hide_keys,
+    };
+
+    let spans = keys
         .iter()
-        .enumerate()
-        .map(|(i, m)| {
-            let content = Line::from(Span::raw(format!("{i}: {m}")));
-            ListItem::new(content)
+        .flat_map(|(key, desc)| {
+            let key = Span::styled(format!(" {} ", key), THEME.key_binding.key);
+            let desc = Span::styled(format!(" {} ", desc), THEME.key_binding.description);
+            [key, desc]
         })
-        .collect();
-    let messages =
-        List::new(messages).block(Block::default().borders(Borders::ALL).title("Messages"));
-    f.render_widget(messages, chunks[2]);
-
-      let keys = [
-            ("Q/Esc", "Quit"),
-            ("f", "Forget"),
-            ("h", "Hard"),
-            ("g", "Good"),
-        ];
-        let spans = keys
-            .iter()
-            .flat_map(|(key, desc)| {
-                let key = Span::styled(format!(" {} ", key), THEME.key_binding.key);
-                let desc = Span::styled(format!(" {} ", desc), THEME.key_binding.description);
-                [key, desc]
-            })
-            .collect_vec();
+        .collect_vec();
     let buttons = Paragraph::new(Line::from(spans))
-            .alignment(Alignment::Center)
-            .fg(Color::Indexed(236))
-            .bg(Color::Indexed(232));
-    f.render_widget(buttons, chunks[3]);
+        .alignment(Alignment::Center)
+        .fg(Color::Indexed(236))
+        .bg(Color::Indexed(232));
+    f.render_widget(buttons, chunks[2]);
+}
 
+fn next(deck: &Deck) -> Option<App> {
+    let Some(question) = deck.search_reviewable() else {
+        return None;
+    };
+    let answer = ghost_get_answer(&question);
+
+    Some(App {
+        question,
+        answer,
+        answer_status: AnswerStatus::Hide,
+    })
+}
+
+fn ghost_get_answer(_question: &str) -> String {
+    "this is answer".to_owned()
 }
